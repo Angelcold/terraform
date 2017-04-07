@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/terraform/helper/acctest"
 )
 
-func TestAccAWSWafIPSet_basic(t *testing.T) {
+func testAccWafIPSet_basic(t *testing.T) {
 	var v waf.IPSet
 	ipsetName := fmt.Sprintf("ip-set-%s", acctest.RandString(5))
 
@@ -38,7 +38,7 @@ func TestAccAWSWafIPSet_basic(t *testing.T) {
 	})
 }
 
-func TestAccAWSWafIPSet_disappears(t *testing.T) {
+func testAccWafIPSet_disappears(t *testing.T) {
 	var v waf.IPSet
 	ipsetName := fmt.Sprintf("ip-set-%s", acctest.RandString(5))
 	resource.Test(t, resource.TestCase{
@@ -58,7 +58,7 @@ func TestAccAWSWafIPSet_disappears(t *testing.T) {
 	})
 }
 
-func TestAccAWSWafIPSet_changeNameForceNew(t *testing.T) {
+func testAccWafIPSet_changeNameForceNew(t *testing.T) {
 	var before, after waf.IPSet
 	ipsetName := fmt.Sprintf("ip-set-%s", acctest.RandString(5))
 	ipsetNewName := fmt.Sprintf("ip-set-new-%s", acctest.RandString(5))
@@ -100,46 +100,39 @@ func testAccCheckAWSWafIPSetDisappears(v *waf.IPSet) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		conn := testAccProvider.Meta().(*AWSClient).wafconn
 
-		// ChangeToken
-		var ct *waf.GetChangeTokenInput
-
-		resp, err := conn.GetChangeToken(ct)
-		if err != nil {
-			return fmt.Errorf("Error getting change token: %s", err)
-		}
-
-		req := &waf.UpdateIPSetInput{
-			ChangeToken: resp.ChangeToken,
-			IPSetId:     v.IPSetId,
-		}
-
-		for _, IPSetDescriptor := range v.IPSetDescriptors {
-			IPSetUpdate := &waf.IPSetUpdate{
-				Action: aws.String("DELETE"),
-				IPSetDescriptor: &waf.IPSetDescriptor{
-					Type:  IPSetDescriptor.Type,
-					Value: IPSetDescriptor.Value,
-				},
+		wt := newWAFToken(conn, "global")
+		_, err := wt.RetryWithToken(func(token *string) (interface{}, error) {
+			req := &waf.UpdateIPSetInput{
+				ChangeToken: token,
+				IPSetId:     v.IPSetId,
 			}
-			req.Updates = append(req.Updates, IPSetUpdate)
-		}
 
-		_, err = conn.UpdateIPSet(req)
+			for _, IPSetDescriptor := range v.IPSetDescriptors {
+				IPSetUpdate := &waf.IPSetUpdate{
+					Action: aws.String("DELETE"),
+					IPSetDescriptor: &waf.IPSetDescriptor{
+						Type:  IPSetDescriptor.Type,
+						Value: IPSetDescriptor.Value,
+					},
+				}
+				req.Updates = append(req.Updates, IPSetUpdate)
+			}
+
+			return conn.UpdateIPSet(req)
+		})
 		if err != nil {
 			return fmt.Errorf("Error Updating WAF IPSet: %s", err)
 		}
 
-		resp, err = conn.GetChangeToken(ct)
+		_, err = wt.RetryWithToken(func(token *string) (interface{}, error) {
+			opts := &waf.DeleteIPSetInput{
+				ChangeToken: token,
+				IPSetId:     v.IPSetId,
+			}
+			return conn.DeleteIPSet(opts)
+		})
 		if err != nil {
-			return fmt.Errorf("Error getting change token for waf IPSet: %s", err)
-		}
-
-		opts := &waf.DeleteIPSetInput{
-			ChangeToken: resp.ChangeToken,
-			IPSetId:     v.IPSetId,
-		}
-		if _, err := conn.DeleteIPSet(opts); err != nil {
-			return err
+			return fmt.Errorf("Error Deleting WAF IPSet: %s", err)
 		}
 		return nil
 	}

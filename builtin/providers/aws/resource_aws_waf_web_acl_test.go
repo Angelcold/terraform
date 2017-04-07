@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/terraform/helper/acctest"
 )
 
-func TestAccAWSWafWebAcl_basic(t *testing.T) {
+func testAccWafWebAcl_basic(t *testing.T) {
 	var v waf.WebACL
 	wafAclName := fmt.Sprintf("wafacl%s", acctest.RandString(5))
 
@@ -42,7 +42,7 @@ func TestAccAWSWafWebAcl_basic(t *testing.T) {
 	})
 }
 
-func TestAccAWSWafWebAcl_changeNameForceNew(t *testing.T) {
+func testAccWafWebAcl_changeNameForceNew(t *testing.T) {
 	var before, after waf.WebACL
 	wafAclName := fmt.Sprintf("wafacl%s", acctest.RandString(5))
 	wafAclNewName := fmt.Sprintf("wafacl%s", acctest.RandString(5))
@@ -88,7 +88,7 @@ func TestAccAWSWafWebAcl_changeNameForceNew(t *testing.T) {
 	})
 }
 
-func TestAccAWSWafWebAcl_changeDefaultAction(t *testing.T) {
+func testAccWafWebAcl_changeDefaultAction(t *testing.T) {
 	var before, after waf.WebACL
 	wafAclName := fmt.Sprintf("wafacl%s", acctest.RandString(5))
 	wafAclNewName := fmt.Sprintf("wafacl%s", acctest.RandString(5))
@@ -134,7 +134,7 @@ func TestAccAWSWafWebAcl_changeDefaultAction(t *testing.T) {
 	})
 }
 
-func TestAccAWSWafWebAcl_disappears(t *testing.T) {
+func testAccWafWebAcl_disappears(t *testing.T) {
 	var v waf.WebACL
 	wafAclName := fmt.Sprintf("wafacl%s", acctest.RandString(5))
 
@@ -159,47 +159,40 @@ func testAccCheckAWSWafWebAclDisappears(v *waf.WebACL) resource.TestCheckFunc {
 	return func(s *terraform.State) error {
 		conn := testAccProvider.Meta().(*AWSClient).wafconn
 
-		// ChangeToken
-		var ct *waf.GetChangeTokenInput
-
-		resp, err := conn.GetChangeToken(ct)
-		if err != nil {
-			return fmt.Errorf("Error getting change token: %s", err)
-		}
-
-		req := &waf.UpdateWebACLInput{
-			ChangeToken: resp.ChangeToken,
-			WebACLId:    v.WebACLId,
-		}
-
-		for _, ActivatedRule := range v.Rules {
-			WebACLUpdate := &waf.WebACLUpdate{
-				Action: aws.String("DELETE"),
-				ActivatedRule: &waf.ActivatedRule{
-					Priority: ActivatedRule.Priority,
-					RuleId:   ActivatedRule.RuleId,
-					Action:   ActivatedRule.Action,
-				},
+		wt := newWAFToken(conn, "global")
+		_, err := wt.RetryWithToken(func(token *string) (interface{}, error) {
+			req := &waf.UpdateWebACLInput{
+				ChangeToken: token,
+				WebACLId:    v.WebACLId,
 			}
-			req.Updates = append(req.Updates, WebACLUpdate)
-		}
 
-		_, err = conn.UpdateWebACL(req)
+			for _, ActivatedRule := range v.Rules {
+				WebACLUpdate := &waf.WebACLUpdate{
+					Action: aws.String("DELETE"),
+					ActivatedRule: &waf.ActivatedRule{
+						Priority: ActivatedRule.Priority,
+						RuleId:   ActivatedRule.RuleId,
+						Action:   ActivatedRule.Action,
+					},
+				}
+				req.Updates = append(req.Updates, WebACLUpdate)
+			}
+
+			return conn.UpdateWebACL(req)
+		})
 		if err != nil {
 			return fmt.Errorf("Error Updating WAF ACL: %s", err)
 		}
 
-		resp, err = conn.GetChangeToken(ct)
+		_, err = wt.RetryWithToken(func(token *string) (interface{}, error) {
+			opts := &waf.DeleteWebACLInput{
+				ChangeToken: token,
+				WebACLId:    v.WebACLId,
+			}
+			return conn.DeleteWebACL(opts)
+		})
 		if err != nil {
-			return fmt.Errorf("Error getting change token for waf ACL: %s", err)
-		}
-
-		opts := &waf.DeleteWebACLInput{
-			ChangeToken: resp.ChangeToken,
-			WebACLId:    v.WebACLId,
-		}
-		if _, err := conn.DeleteWebACL(opts); err != nil {
-			return err
+			return fmt.Errorf("Error Deleting WAF ACL: %s", err)
 		}
 		return nil
 	}

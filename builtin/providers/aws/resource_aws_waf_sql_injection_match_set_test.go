@@ -14,7 +14,7 @@ import (
 	"github.com/hashicorp/terraform/helper/acctest"
 )
 
-func TestAccAWSWafSqlInjectionMatchSet_basic(t *testing.T) {
+func testAccWafSqlInjectionMatchSet_basic(t *testing.T) {
 	var v waf.SqlInjectionMatchSet
 	sqlInjectionMatchSet := fmt.Sprintf("sqlInjectionMatchSet-%s", acctest.RandString(5))
 
@@ -37,7 +37,7 @@ func TestAccAWSWafSqlInjectionMatchSet_basic(t *testing.T) {
 	})
 }
 
-func TestAccAWSWafSqlInjectionMatchSet_changeNameForceNew(t *testing.T) {
+func testAccWafSqlInjectionMatchSet_changeNameForceNew(t *testing.T) {
 	var before, after waf.SqlInjectionMatchSet
 	sqlInjectionMatchSet := fmt.Sprintf("sqlInjectionMatchSet-%s", acctest.RandString(5))
 	sqlInjectionMatchSetNewName := fmt.Sprintf("sqlInjectionMatchSetNewName-%s", acctest.RandString(5))
@@ -71,7 +71,7 @@ func TestAccAWSWafSqlInjectionMatchSet_changeNameForceNew(t *testing.T) {
 	})
 }
 
-func TestAccAWSWafSqlInjectionMatchSet_disappears(t *testing.T) {
+func testAccWafSqlInjectionMatchSet_disappears(t *testing.T) {
 	var v waf.SqlInjectionMatchSet
 	sqlInjectionMatchSet := fmt.Sprintf("sqlInjectionMatchSet-%s", acctest.RandString(5))
 
@@ -96,44 +96,38 @@ func testAccCheckAWSWafSqlInjectionMatchSetDisappears(v *waf.SqlInjectionMatchSe
 	return func(s *terraform.State) error {
 		conn := testAccProvider.Meta().(*AWSClient).wafconn
 
-		var ct *waf.GetChangeTokenInput
-
-		resp, err := conn.GetChangeToken(ct)
-		if err != nil {
-			return fmt.Errorf("Error getting change token: %s", err)
-		}
-
-		req := &waf.UpdateSqlInjectionMatchSetInput{
-			ChangeToken:            resp.ChangeToken,
-			SqlInjectionMatchSetId: v.SqlInjectionMatchSetId,
-		}
-
-		for _, sqlInjectionMatchTuple := range v.SqlInjectionMatchTuples {
-			sqlInjectionMatchTupleUpdate := &waf.SqlInjectionMatchSetUpdate{
-				Action: aws.String("DELETE"),
-				SqlInjectionMatchTuple: &waf.SqlInjectionMatchTuple{
-					FieldToMatch:       sqlInjectionMatchTuple.FieldToMatch,
-					TextTransformation: sqlInjectionMatchTuple.TextTransformation,
-				},
+		wt := newWAFToken(conn, "global")
+		_, err := wt.RetryWithToken(func(token *string) (interface{}, error) {
+			req := &waf.UpdateSqlInjectionMatchSetInput{
+				ChangeToken:            token,
+				SqlInjectionMatchSetId: v.SqlInjectionMatchSetId,
 			}
-			req.Updates = append(req.Updates, sqlInjectionMatchTupleUpdate)
-		}
-		_, err = conn.UpdateSqlInjectionMatchSet(req)
+
+			for _, sqlInjectionMatchTuple := range v.SqlInjectionMatchTuples {
+				sqlInjectionMatchTupleUpdate := &waf.SqlInjectionMatchSetUpdate{
+					Action: aws.String("DELETE"),
+					SqlInjectionMatchTuple: &waf.SqlInjectionMatchTuple{
+						FieldToMatch:       sqlInjectionMatchTuple.FieldToMatch,
+						TextTransformation: sqlInjectionMatchTuple.TextTransformation,
+					},
+				}
+				req.Updates = append(req.Updates, sqlInjectionMatchTupleUpdate)
+			}
+			return conn.UpdateSqlInjectionMatchSet(req)
+		})
 		if err != nil {
 			return errwrap.Wrapf("[ERROR] Error updating SqlInjectionMatchSet: {{err}}", err)
 		}
 
-		resp, err = conn.GetChangeToken(ct)
+		_, err = wt.RetryWithToken(func(token *string) (interface{}, error) {
+			opts := &waf.DeleteSqlInjectionMatchSetInput{
+				ChangeToken:            token,
+				SqlInjectionMatchSetId: v.SqlInjectionMatchSetId,
+			}
+			return conn.DeleteSqlInjectionMatchSet(opts)
+		})
 		if err != nil {
-			return errwrap.Wrapf("[ERROR] Error getting change token: {{err}}", err)
-		}
-
-		opts := &waf.DeleteSqlInjectionMatchSetInput{
-			ChangeToken:            resp.ChangeToken,
-			SqlInjectionMatchSetId: v.SqlInjectionMatchSetId,
-		}
-		if _, err := conn.DeleteSqlInjectionMatchSet(opts); err != nil {
-			return err
+			return errwrap.Wrapf("[ERROR] Error deleting SqlInjectionMatchSet: {{err}}", err)
 		}
 		return nil
 	}
